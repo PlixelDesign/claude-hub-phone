@@ -1,6 +1,6 @@
 // Service worker do Claude Hub (celular): recebe os pushes do PC, mostra a notificação
 // e envia Permitir/Negar de volta pelo canal de resposta (payload.r), sem abrir o app.
-const VERSION = 'hub-v1';
+const VERSION = 'hub-v2';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 const ICON = new URL('icon-192.png', self.registration.scope).href;
 const BADGE = new URL('badge-96.png', self.registration.scope).href;
@@ -40,6 +40,10 @@ function build(d) {
       actions: d.canReply ? [{ action: 'reply', title: 'Responder' }] : [],
     }];
   }
+  if (d.k === 'working') {
+    const t = new Date(d.since || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return [`Trabalhando · ${d.project}`, { ...base, tag: d.id, body: `Claude está trabalhando desde ${t}. Aviso quando terminar.`, silent: true, requireInteraction: true, timestamp: d.since || Date.now() }];
+  }
   if (d.k === 'idle') {
     return [`Esperando você · ${d.project}`, { ...base, body: clip(d.msg, 220) || 'O Claude precisa de você.', vibrate: [100] }];
   }
@@ -49,6 +53,12 @@ function build(d) {
   return ['Claude Hub', { ...base, body: clip(d.msg, 220) }];
 }
 
+async function closeTag(tag) { (await self.registration.getNotifications({ tag })).forEach((n) => n.close()); }
+async function workend(d) { // o Claude terminou sem aviso de "Terminou": troca por um aviso curto e some
+  await self.registration.showNotification(`Terminou · ${d.project || ''}`, { tag: d.id, silent: true, icon: ICON, badge: BADGE, requireInteraction: false });
+  await new Promise((r) => setTimeout(r, 4000));
+  await closeTag(d.id);
+}
 async function resolved(d) { // troca a notificação por um aviso silencioso e some em seguida
   await self.registration.showNotification(`Respondido${d.by ? ' · ' + d.by : ''}`, { tag: d.id, silent: true, icon: ICON, badge: BADGE, requireInteraction: false });
   await new Promise((r) => setTimeout(r, 2500));
@@ -59,8 +69,9 @@ self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data.json(); } catch { d = { k: 'test' }; }
   if (d.k === 'resolved') return e.waitUntil(resolved(d));
+  if (d.k === 'workend') return e.waitUntil(workend(d));
   const [title, opts] = build(d);
-  e.waitUntil(self.registration.showNotification(title, opts));
+  e.waitUntil((async () => { if (d.wid) await closeTag(d.wid); await self.registration.showNotification(title, opts); })());
 });
 
 async function send(url, msg) {

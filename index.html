@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Claude Hub</title>
+<style>
+  :root {
+    --bg: #000; --card: #0f1114; --line: rgba(255,255,255,.09); --text: #f5f5f7; --muted: #9ca3af;
+    --blue: #3b82f6; --green: #34d399; --amber: #fbbf24; --red: #f87171; --orange: #d97757;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  body { min-height: 100dvh; padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  .wrap { max-width: 460px; margin: 0 auto; display: grid; gap: 14px; }
+  header { display: flex; align-items: center; gap: 10px; padding: 6px 2px 2px; }
+  header img { width: 30px; height: 30px; border-radius: 9px; }
+  header b { font-size: 17px; letter-spacing: .01em; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 18px; display: grid; gap: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .amber { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  .green { background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .red { background: var(--red); box-shadow: 0 0 10px var(--red); }
+  .title { font-weight: 650; font-size: 17px; line-height: 1.25; }
+  .muted { color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .small { font-size: 12.5px; }
+  pre.cmd, .said {
+    margin: 0; background: #14171b; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+    font: 13px/1.5 ui-monospace, 'Cascadia Mono', Consolas, monospace; color: #d1d5db; white-space: pre-wrap; word-break: break-word; max-height: 38dvh; overflow: auto;
+  }
+  .said { font-family: inherit; font-size: 14.5px; }
+  label.lbl { font-size: 13px; color: var(--muted); }
+  textarea {
+    width: 100%; background: #14171b; color: var(--text); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px; font: inherit; font-size: 16px; resize: vertical; min-height: 84px;
+  }
+  textarea:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btns.one { grid-template-columns: 1fr; }
+  button {
+    font: inherit; font-size: 16px; font-weight: 650; border: 0; border-radius: 999px; padding: 15px 18px; cursor: pointer; color: var(--text);
+    background: #1f2329; min-height: 52px;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .45; }
+  button.allow, button.primary { background: var(--blue); color: #fff; }
+  button.deny { background: #2a1517; color: #fca5a5; }
+  button.ghost { background: transparent; border: 1px solid var(--line); font-weight: 550; }
+  .state { text-align: center; padding: 18px 8px; display: grid; gap: 6px; }
+  .state .big { font-size: 40px; line-height: 1; }
+  .err { color: var(--red); font-size: 13.5px; }
+  ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+  hr { border: 0; border-top: 1px solid var(--line); width: 100%; margin: 2px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><img src="icon-192.png" alt=""><b>Claude Hub</b></header>
+  <main id="app"></main>
+</div>
+<script>
+'use strict';
+const app = document.getElementById('app');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const b64e = (o) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64d = (s) => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))));
+const store = {
+  get() { try { return JSON.parse(localStorage.getItem('hub') || 'null'); } catch { return null; } },
+  set(v) { try { localStorage.setItem('hub', JSON.stringify(v)); } catch {} },
+  clear() { try { localStorage.removeItem('hub'); } catch {} },
+};
+async function send(url, msg) {
+  const r = await fetch(url, { method: 'POST', body: JSON.stringify(msg) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+}
+const $ = (id) => document.getElementById(id);
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; const b = $('install'); if (b) b.hidden = false; });
+
+function state(icon, title, text, extra = '') {
+  app.innerHTML = `<div class="card state"><div class="big">${icon}</div><div class="title">${esc(title)}</div><div class="muted">${esc(text)}</div>${extra}</div>`;
+}
+
+// ───── Pareamento (QR do PC) ─────
+function viewSetup(cfg) {
+  app.innerHTML = `
+    <div class="card">
+      <div class="title">Conectar ao Claude Hub do seu PC</div>
+      <div class="muted">Vou ativar as notificações deste celular. Elas chegam com os botões Permitir e Negar, e você pode responder ao Claude daqui.</div>
+      <button class="primary" id="go">Ativar notificações</button>
+      <div class="err" id="err"></div>
+    </div>`;
+  $('go').onclick = async () => {
+    const btn = $('go'); btn.disabled = true; $('err').textContent = '';
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('Este navegador não suporta notificações push. Use o Chrome no Android.');
+      const reg = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      if ((await Notification.requestPermission()) !== 'granted') throw new Error('Você não permitiu as notificações. Libere em Configurações do site e tente de novo.');
+      const pad = '='.repeat((4 - (cfg.k.length % 4)) % 4);
+      const key = Uint8Array.from(atob((cfg.k + pad).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      const ua = navigator.userAgent;
+      const name = (/Android[^;)]*;\s*([^;)]+)/.exec(ua) || [])[1] || 'Celular';
+      await send(cfg.r, { t: 'pair', sub: sub.toJSON(), name: name.trim().slice(0, 40) });
+      store.set({ r: cfg.r });
+      history.replaceState(null, '', location.pathname); // tira o segredo da barra de endereço
+      viewDone();
+    } catch (e) {
+      $('err').textContent = e.message || String(e);
+      btn.disabled = false;
+    }
+  };
+}
+function viewDone() {
+  state('✅', 'Celular conectado', 'Uma notificação de teste vai chegar em instantes. Para abrir como app, use o menu ⋮ do Chrome → "Instalar app".',
+    '<button class="ghost" id="home">Continuar</button>');
+  $('home').onclick = viewHome;
+}
+
+// ───── Início ─────
+function viewHome() {
+  const c = store.get();
+  if (!c) {
+    app.innerHTML = `<div class="card"><div class="title">Ainda não conectado</div>
+      <ol><li>No PC, abra o <b>Claude Hub</b> (ícone na bandeja).</li><li>Na seção <b>Celular</b>, mostre o QR.</li><li>Escaneie com a câmera deste celular.</li></ol></div>`;
+    return;
+  }
+  app.innerHTML = `
+    <div class="card">
+      <div class="row"><span class="dot green"></span><div class="title">Conectado ao seu PC</div></div>
+      <div class="muted">Pedidos de permissão e avisos do Claude chegam como notificação.</div>
+      <hr>
+      <div class="title" style="font-size:15px">Modo "longe do PC"</div>
+      <div class="muted small">Quando o Claude terminar, você pode responder daqui e ele continua.</div>
+      <div class="btns"><button class="ghost" id="away">Estou longe</button><button class="ghost" id="back">Voltei</button></div>
+      <div class="muted small" id="msg"></div>
+    </div>
+    <div class="card">
+      <button class="primary" id="test">Testar notificação</button>
+      <button class="ghost" id="install" hidden>Instalar como app</button>
+      <button class="ghost" id="off">Desconectar este celular</button>
+    </div>`;
+  if (installEvt) $('install').hidden = false;
+  const say = (t, bad) => { $('msg').textContent = t; $('msg').style.color = bad ? 'var(--red)' : ''; };
+  $('away').onclick = () => send(c.r, { t: 'away', on: true }).then(() => say('Ok: o PC vai esperar suas respostas.'), () => say('Falhou. Verifique a internet.', 1));
+  $('back').onclick = () => send(c.r, { t: 'away', on: false }).then(() => say('Ok: modo longe desligado.'), () => say('Falhou. Verifique a internet.', 1));
+  $('test').onclick = () => send(c.r, { t: 'ping' }).then(() => say('Pedi uma notificação de teste ao PC.'), () => say('Falhou. Verifique a internet.', 1));
+  $('install').onclick = async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('install').hidden = true; } };
+  $('off').onclick = async () => {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && (await reg.pushManager.getSubscription());
+      if (sub) { await send(c.r, { t: 'unpair', endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+    } catch {}
+    store.clear(); viewHome();
+  };
+}
+
+// ───── Notificação aberta ─────
+function expired(d) { return d.exp && Date.now() > d.exp; }
+function viewNotification(d) {
+  if (!d || !d.r) return viewHome();
+  if (d.k === 'perm') return viewPerm(d);
+  if (d.k === 'stop' && d.canReply) return viewReply(d);
+  if (d.k === 'stop' || d.k === 'idle') {
+    return state('✅', d.k === 'stop' ? `Terminou · ${d.project}` : `Esperando você · ${d.project}`, d.last || d.msg || '', '<button class="ghost" id="ok">Fechar</button>'), ($('ok').onclick = () => (window.close(), viewHome()));
+  }
+  viewHome();
+}
+function viewPerm(d) {
+  const old = expired(d);
+  app.innerHTML = `
+    <div class="card">
+      <div class="row"><span class="dot amber"></span><div class="title">Claude quer usar ${esc(d.tool)}</div></div>
+      <div class="muted">${esc(d.project)}</div>
+      <pre class="cmd">${esc(d.cmd)}</pre>
+      ${old ? '<div class="err">Este pedido já expirou ou foi respondido. Se ainda estiver pendente, responda no Claude.</div>' : `
+      <label class="lbl" for="msg">Se negar, diga ao Claude o que fazer (opcional)</label>
+      <textarea id="msg" placeholder="Ex.: use pnpm em vez de npm"></textarea>
+      <div class="btns"><button class="deny" id="deny">Negar</button><button class="allow" id="allow">Permitir</button></div>
+      <div class="err" id="err"></div>`}
+    </div>`;
+  if (old) return;
+  $('msg').addEventListener('input', () => { $('deny').textContent = $('msg').value.trim() ? 'Negar e enviar' : 'Negar'; });
+  const act = async (b) => {
+    $('allow').disabled = $('deny').disabled = true;
+    try {
+      const m = b === 'deny' ? $('msg').value.trim() : '';
+      await send(d.r, { t: 'decide', id: d.id, b, ...(m ? { m } : {}) });
+      state(b === 'allow' ? '✅' : '🚫', b === 'allow' ? 'Permitido' : 'Negado', m ? 'Sua mensagem foi enviada ao Claude.' : 'Enviado ao PC.',
+        '<button class="ghost" id="ok">Fechar</button>');
+      $('ok').onclick = () => (window.close(), viewHome());
+    } catch (e) {
+      $('err').textContent = 'Não consegui enviar. Verifique a internet e tente de novo.';
+      $('allow').disabled = $('deny').disabled = false;
+    }
+  };
+  $('allow').onclick = () => act('allow');
+  $('deny').onclick = () => act('deny');
+}
+function viewReply(d) {
+  const old = expired(d);
+  app.innerHTML = `
+    <div class="card">
+      <div class="row"><span class="dot green"></span><div class="title">Terminou · ${esc(d.project)}</div></div>
+      ${d.last ? `<div class="said">${esc(d.last)}</div>` : ''}
+      ${old ? '<div class="err">O tempo para responder acabou. Volte ao PC para continuar.</div>' : `
+      <label class="lbl" for="txt">Responder ao Claude</label>
+      <textarea id="txt" placeholder="Ex.: pode subir para produção" autofocus></textarea>
+      <div class="btns"><button class="ghost" id="none">Sem resposta</button><button class="primary" id="sendbtn">Enviar</button></div>
+      <div class="err" id="err"></div>`}
+    </div>`;
+  if (old) return;
+  const go = async (msg, doneTitle, doneText) => {
+    $('sendbtn').disabled = $('none').disabled = true;
+    try {
+      await send(d.r, msg);
+      state('✅', doneTitle, doneText, '<button class="ghost" id="ok">Fechar</button>');
+      $('ok').onclick = () => (window.close(), viewHome());
+    } catch {
+      $('err').textContent = 'Não consegui enviar. Verifique a internet e tente de novo.';
+      $('sendbtn').disabled = $('none').disabled = false;
+    }
+  };
+  $('sendbtn').onclick = () => {
+    const text = $('txt').value.trim();
+    if (!text) { $('err').textContent = 'Escreva uma mensagem ou toque em "Sem resposta".'; return; }
+    go({ t: 'say', id: d.id, text }, 'Enviado', 'O Claude vai continuar com a sua mensagem.');
+  };
+  $('none').onclick = () => go({ t: 'noreply', id: d.id }, 'Ok', 'O Claude não vai esperar mais.');
+}
+
+// ───── Rota ─────
+function route() {
+  const h = location.hash;
+  try {
+    if (h.startsWith('#setup=')) return viewSetup(b64d(h.slice(7)));
+    if (h.startsWith('#/n/')) return viewNotification(b64d(h.slice(4)));
+  } catch { /* hash inválido */ }
+  viewHome();
+}
+window.addEventListener('hashchange', route);
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'show') viewNotification(e.data.d); });
+  if (store.get()) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+route();
+</script>
+</body>
+</html>
